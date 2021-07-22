@@ -4,7 +4,8 @@ sys.path.insert(0, './yolov5')
 from yolov5.utils.google_utils import attempt_download
 from yolov5.models.experimental import attempt_load
 from yolov5.utils.datasets import LoadImages, LoadStreams
-from yolov5.utils.general import check_img_size, non_max_suppression, scale_coords, check_imshow, xyxy2xywh
+from yolov5.utils.general import check_img_size, non_max_suppression, \
+    scale_coords, check_imshow, xyxy2xywh, colorstr, check_requirements
 from yolov5.utils.torch_utils import select_device, time_synchronized
 from yolov5.utils.plots import plot_one_box
 from deep_sort_pytorch.utils.parser import get_config
@@ -30,10 +31,37 @@ def compute_color_for_id(label):
     return tuple(color)
 
 
-def detect(opt):
-    out, source, yolo_weights, deep_sort_weights, show_vid, save_vid, save_txt, imgsz, evaluate = \
-        opt.output, opt.source, opt.yolo_weights, opt.deep_sort_weights, opt.show_vid, opt.save_vid, \
-            opt.save_txt, opt.img_size, opt.evaluate
+@torch.no_grad()
+def run(yolo_weights='yolov5/weights/yolov5s.pt',  # model.pt path(s)
+        deep_sort_weights='deep_sort_pytorch/deep_sort/deep/checkpoint/ckpt.t7',
+        source='data/images',  # file/dir/URL/glob, 0 for webcam
+        output='inference/output',
+        imgsz=640,  # inference size (pixels)
+        conf_thres=0.25,  # confidence threshold
+        iou_thres=0.45,  # NMS IOU threshold
+        max_det=1000,  # maximum detections per image
+        device='',  # cuda device, i.e. 0 or 0,1,2,3 or cpu
+        view_img=False,  # show results
+        save_txt=False,  # save results to *.txt
+        show_vid=True,
+        save_vid=True,
+        save_conf=False,  # save confidences in --save-txt labels
+        save_crop=False,  # save cropped prediction boxes
+        nosave=False,  # do not save images/videos
+        classes=None,  # filter by class: --class 0, or --class 0 2 3
+        agnostic_nms=False,  # class-agnostic NMS
+        augment=False,  # augmented inference
+        visualize=False,  # visualize features
+        update=False,  # update all models
+        project='runs/detect',  # save results to project/name
+        name='exp',  # save results to project/name
+        exist_ok=False,  # existing project/name ok, do not increment
+        line_thickness=2,  # bounding box thickness (pixels)
+        hide_labels=False,  # hide labels
+        half=False,  # use FP16 half-precision inference
+        evaluate=True,
+        config_deepsort='deep_sort_pytorch/configs/deep_sort.yaml'
+        ):
     webcam = source == '0' or source.startswith(
         'rtsp') or source.startswith('http') or source.endswith('.txt')
 
@@ -53,10 +81,10 @@ def detect(opt):
     # The MOT16 evaluation runs multiple inference streams in parallel, each one writing to
     # its own .txt file. Hence, in that case, the output folder is not restored
     if not evaluate:
-        if os.path.exists(out):
+        if os.path.exists(output):
             pass
-            shutil.rmtree(out)  # delete output folder
-        os.makedirs(out)  # make new output folder
+            shutil.rmtree(output)  # delete output folder
+        os.makedirs(output)  # make new output folder
     half = device.type != 'cpu'  # half precision only supported on CUDA
 
     # Load model
@@ -87,10 +115,10 @@ def detect(opt):
         model(torch.zeros(1, 3, imgsz, imgsz).to(device).type_as(next(model.parameters())))  # run once
     t0 = time.time()
 
-    save_path = str(Path(out))
+    save_path = str(Path(output))
     # extract what is in between the last '/' and last '.'
     txt_file_name = source.split('/')[-1].split('.')[0]
-    txt_path = str(Path(out)) + '/' + txt_file_name + '.txt'
+    txt_path = str(Path(output)) + '/' + txt_file_name + '.txt'
 
     for frame_idx, (path, img, im0s, vid_cap) in enumerate(dataset):
         img = torch.from_numpy(img).to(device)
@@ -116,7 +144,7 @@ def detect(opt):
                 p, s, im0 = path, '', im0s
 
             s += '%gx%g ' % img.shape[2:]  # print string
-            save_path = str(Path(out) / Path(p).name)
+            save_path = str(Path(output) / Path(p).name)
 
             if det is not None and len(det):
                 # Rescale boxes from img_size to im0 size
@@ -133,27 +161,28 @@ def detect(opt):
                 clss = det[:, 5]
 
                 # pass detections to deepsort
-                outputs = deepsort.update(xywhs.cpu(), confs.cpu(), clss, im0)
+                tracks = deepsort.update(xywhs.cpu(), confs.cpu(), clss, im0)
                 
                 # draw boxes for visualization
-                if len(outputs) > 0:
-                    for j, (output, conf) in enumerate(zip(outputs, confs)): 
+                if len(tracks) > 0:
+                    for j, (track, conf) in enumerate(zip(tracks, confs)): 
                         
-                        bboxes = output[0:4]
-                        id = output[4]
-                        cls = output[5]
+                        bboxes = track[0:4]
+                        id = track[4]
+                        cls = track[5]
 
                         c = int(cls)  # integer class
+                        label = None if hide_labels else f'{id} {names[c]} {conf:.2f}'
                         label = f'{id} {names[c]} {conf:.2f}'
                         color = compute_color_for_id(id)
-                        plot_one_box(bboxes, im0, label=label, color=color, line_thickness=2)
+                        plot_one_box(bboxes, im0, label=label, color=color, line_thickness=line_thickness)
 
                         if save_txt:
                             # to MOT format
-                            bbox_top = output[0]
-                            bbox_left = output[1]
-                            bbox_w = output[2] - output[0]
-                            bbox_h = output[3] - output[1]
+                            bbox_top = track[0]
+                            bbox_left = track[1]
+                            bbox_w = track[2] - track[0]
+                            bbox_h = track[3] - track[1]
                             # Write MOT compliant results to file
                             with open(txt_path, 'a') as f:
                                f.write(('%g ' * 10 + '\n') % (frame_idx, id, bbox_top,
@@ -196,29 +225,48 @@ def detect(opt):
     print('Done. (%.3fs)' % (time.time() - t0))
 
 
-if __name__ == '__main__':
+def parse_opt():
     parser = argparse.ArgumentParser()
     parser.add_argument('--yolo_weights', type=str, default='yolov5/weights/yolov5s.pt', help='model.pt path')
     parser.add_argument('--deep_sort_weights', type=str, default='deep_sort_pytorch/deep_sort/deep/checkpoint/ckpt.t7', help='ckpt.t7 path')
-    # file/folder, 0 for webcam
-    parser.add_argument('--source', type=str, default='0', help='source')
+    parser.add_argument('--source', type=str, default='data/images', help='file/dir/URL/glob, 0 for webcam')
     parser.add_argument('--output', type=str, default='inference/output', help='output folder')  # output folder
-    parser.add_argument('--img-size', type=int, default=640, help='inference size (pixels)')
-    parser.add_argument('--conf-thres', type=float, default=0.4, help='object confidence threshold')
-    parser.add_argument('--iou-thres', type=float, default=0.5, help='IOU threshold for NMS')
-    parser.add_argument('--fourcc', type=str, default='mp4v', help='output video codec (verify ffmpeg support)')
+    parser.add_argument('--imgsz', '--img', '--img-size', type=int, default=640, help='inference size (pixels)')
+    parser.add_argument('--conf-thres', type=float, default=0.25, help='confidence threshold')
+    parser.add_argument('--iou-thres', type=float, default=0.45, help='NMS IoU threshold')
+    parser.add_argument('--max-det', type=int, default=1000, help='maximum detections per image')
     parser.add_argument('--device', default='', help='cuda device, i.e. 0 or 0,1,2,3 or cpu')
+    parser.add_argument('--view-img', action='store_true', help='show results')
+    parser.add_argument('--save-txt', action='store_true', help='save results to *.txt')
     parser.add_argument('--show-vid', action='store_true', help='display tracking video results')
     parser.add_argument('--save-vid', action='store_true', help='save video tracking results')
-    parser.add_argument('--save-txt', action='store_true', help='save MOT compliant results to *.txt')
-    # class 0 is person, 1 is bycicle, 2 is car... 79 is oven
-    parser.add_argument('--classes', nargs='+', type=int, help='filter by class: --class 0, or --class 16 17')
+    parser.add_argument('--save-conf', action='store_true', help='save confidences in --save-txt labels')
+    parser.add_argument('--save-crop', action='store_true', help='save cropped prediction boxes')
+    parser.add_argument('--nosave', action='store_true', help='do not save images/videos')
+    parser.add_argument('--classes', nargs='+', type=int, help='filter by class: --class 0, or --class 0 2 3')
     parser.add_argument('--agnostic-nms', action='store_true', help='class-agnostic NMS')
     parser.add_argument('--augment', action='store_true', help='augmented inference')
+    parser.add_argument('--visualize', action='store_true', help='visualize features')
+    parser.add_argument('--update', action='store_true', help='update all models')
+    parser.add_argument('--project', default='runs/detect', help='save results to project/name')
+    parser.add_argument('--name', default='exp', help='save results to project/name')
+    parser.add_argument('--exist-ok', action='store_true', help='existing project/name ok, do not increment')
+    parser.add_argument('--line-thickness', default=3, type=int, help='bounding box thickness (pixels)')
+    parser.add_argument('--hide-labels', default=False, action='store_true', help='hide labels')
+    parser.add_argument('--half', action='store_true', help='use FP16 half-precision inference')
     parser.add_argument('--evaluate', action='store_true', help='augmented inference')
     parser.add_argument("--config_deepsort", type=str, default="deep_sort_pytorch/configs/deep_sort.yaml")
-    args = parser.parse_args()
-    args.img_size = check_img_size(args.img_size)
 
-    with torch.no_grad():
-        detect(args)
+    opt = parser.parse_args()
+    return opt
+
+
+def main(opt):
+    print(colorstr('detect: ') + ', '.join(f'{k}={v}' for k, v in vars(opt).items()))
+    check_requirements(exclude=('tensorboard', 'thop'))
+    run(**vars(opt))
+
+
+if __name__ == "__main__":
+    opt = parse_opt()
+    main(opt)
