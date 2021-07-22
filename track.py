@@ -47,13 +47,12 @@ def run(yolo_weights='yolov5/weights/yolov5s.pt',  # model.pt path(s)
         save_vid=True,
         save_conf=False,  # save confidences in --save-txt labels
         save_crop=False,  # save cropped prediction boxes
-        nosave=False,  # do not save images/videos
         classes=None,  # filter by class: --class 0, or --class 0 2 3
         agnostic_nms=False,  # class-agnostic NMS
         augment=False,  # augmented inference
         visualize=False,  # visualize features
         update=False,  # update all models
-        project='runs/detect',  # save results to project/name
+        project='runs/track',  # save results to project/name
         name='exp',  # save results to project/name
         exist_ok=False,  # existing project/name ok, do not increment
         line_thickness=2,  # bounding box thickness (pixels)
@@ -242,7 +241,6 @@ def parse_opt():
     parser.add_argument('--save-vid', action='store_true', help='save video tracking results')
     parser.add_argument('--save-conf', action='store_true', help='save confidences in --save-txt labels')
     parser.add_argument('--save-crop', action='store_true', help='save cropped prediction boxes')
-    parser.add_argument('--nosave', action='store_true', help='do not save images/videos')
     parser.add_argument('--classes', nargs='+', type=int, help='filter by class: --class 0, or --class 0 2 3')
     parser.add_argument('--agnostic-nms', action='store_true', help='class-agnostic NMS')
     parser.add_argument('--augment', action='store_true', help='augmented inference')
@@ -262,7 +260,7 @@ def parse_opt():
 
 
 def main(opt):
-    print(colorstr('detect: ') + ', '.join(f'{k}={v}' for k, v in vars(opt).items()))
+    print(colorstr('track: ') + ', '.join(f'{k}={v}' for k, v in vars(opt).items()))
     check_requirements(exclude=('tensorboard', 'thop'))
     run(**vars(opt))
 
