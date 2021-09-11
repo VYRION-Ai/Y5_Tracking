@@ -1,11 +1,12 @@
 import sys
-sys.path.insert(0, './yolov5')
 
+sys.path.insert(0, './yolov5')
+import save_firebase as save_firebase
 from yolov5.utils.google_utils import attempt_download
 from yolov5.models.experimental import attempt_load
 from yolov5.utils.datasets import LoadImages, LoadStreams
 from yolov5.utils.general import check_img_size, non_max_suppression, scale_coords, check_imshow, xyxy2xywh
-from yolov5.utils.torch_utils import select_device, time_synchronized
+from yolov5.utils.torch_utils import select_device  # , time_synchronized
 from yolov5.utils.plots import plot_one_box
 from deep_sort_pytorch.utils.parser import get_config
 from deep_sort_pytorch.deep_sort import DeepSort
@@ -18,6 +19,34 @@ from pathlib import Path
 import cv2
 import torch
 import torch.backends.cudnn as cudnn
+import telepot
+import firebase_admin
+from firebase_admin import credentials
+from firebase_admin import db
+from datetime import datetime
+
+from firebase import firebase
+import os
+import pyrebase
+import os
+
+
+def checkKey(dict, key):
+    if key in dict.keys():
+        return 1
+    else:
+        return 0
+
+
+def save1(date_, url, number):
+    my_image = url
+    storage.child("Images").child(my_image).put(my_image)
+    time.sleep(1)
+    users_ref.push().set({
+        'number': number,
+        'url': date_,
+        'date': date_,
+    })
 
 
 def compute_color_for_id(label):
@@ -33,11 +62,12 @@ def compute_color_for_id(label):
 def detect(opt):
     out, source, yolo_weights, deep_sort_weights, show_vid, save_vid, save_txt, imgsz, evaluate = \
         opt.output, opt.source, opt.yolo_weights, opt.deep_sort_weights, opt.show_vid, opt.save_vid, \
-            opt.save_txt, opt.img_size, opt.evaluate
+        opt.save_txt, opt.img_size, opt.evaluate
     webcam = source == '0' or source.startswith(
         'rtsp') or source.startswith('http') or source.endswith('.txt')
 
     # initialize deepsort
+
     cfg = get_config()
     cfg.merge_from_file(opt.config_deepsort)
     attempt_download(deep_sort_weights, repo='mikel-brostrom/Yolov5_DeepSort_Pytorch')
@@ -91,7 +121,7 @@ def detect(opt):
     # extract what is in between the last '/' and last '.'
     txt_file_name = source.split('/')[-1].split('.')[0]
     txt_path = str(Path(out)) + '/' + txt_file_name + '.txt'
-
+    id_list = {}
     for frame_idx, (path, img, im0s, vid_cap) in enumerate(dataset):
         img = torch.from_numpy(img).to(device)
         img = img.half() if half else img.float()  # uint8 to fp16/32
@@ -100,22 +130,23 @@ def detect(opt):
             img = img.unsqueeze(0)
 
         # Inference
-        t1 = time_synchronized()
+        # t1 = time_synchronized()
         pred = model(img, augment=opt.augment)[0]
 
         # Apply NMS
         pred = non_max_suppression(
             pred, opt.conf_thres, opt.iou_thres, classes=opt.classes, agnostic=opt.agnostic_nms)
-        t2 = time_synchronized()
+        # t2 = time_synchronized()
+
 
         # Process detections
         for i, det in enumerate(pred):  # detections per image
             if webcam:  # batch_size >= 1
-                p, s, im0 = path[i], '%g: ' % i, im0s[i].copy()
+                p, s, im0 = path[i], '', im0s[i].copy()
             else:
                 p, s, im0 = path, '', im0s
 
-            s += '%gx%g ' % img.shape[2:]  # print string
+            # s += '%gx%g ' % img.shape[2:]  # print string
             save_path = str(Path(out) / Path(p).name)
 
             if det is not None and len(det):
@@ -134,11 +165,11 @@ def detect(opt):
 
                 # pass detections to deepsort
                 outputs = deepsort.update(xywhs.cpu(), confs.cpu(), clss, im0)
-                
+
                 # draw boxes for visualization
                 if len(outputs) > 0:
-                    for j, (output, conf) in enumerate(zip(outputs, confs)): 
-                        
+                    for j, (output, conf) in enumerate(zip(outputs, confs)):
+
                         bboxes = output[0:4]
                         id = output[4]
                         cls = output[5]
@@ -146,7 +177,20 @@ def detect(opt):
                         c = int(cls)  # integer class
                         label = f'{id} {names[c]} {conf:.2f}'
                         color = compute_color_for_id(id)
-                        plot_one_box(bboxes, im0, label=label, color=color, line_thickness=2)
+                        plot_one_box(bboxes, im0, label=label, color=color)
+                        # Print time (inference + NMS)
+                        # print('%sDone. (%.3fs)' % (s, t2 - t1))
+                        time_stamp = int(time.time())
+                        re_id = checkKey(id_list, id)
+                        if re_id == 0:
+                            fcm_photo = f'c.jpg'
+                            now = datetime.now()
+                            cv2.imwrite(fcm_photo, im0)  # notification photo
+                            dt_string = now.strftime("%d.%m.%Y %H:%M:%S")
+                            save_firebase.save1(dt_string, dt_string, s)
+                            id_list = {id: id}
+                            print(id_list)
+                            print(re_id)
 
                         if save_txt:
                             # to MOT format
@@ -156,14 +200,12 @@ def detect(opt):
                             bbox_h = output[3] - output[1]
                             # Write MOT compliant results to file
                             with open(txt_path, 'a') as f:
-                               f.write(('%g ' * 10 + '\n') % (frame_idx, id, bbox_left,
-                                                           bbox_top, bbox_w, bbox_h, -1, -1, -1, -1))  # label format
+                                f.write(('%g ' * 10 + '\n') % (frame_idx, id, bbox_left,
+                                                               bbox_top, bbox_w, bbox_h, -1, -1, -1,
+                                                               -1))  # label format
 
             else:
                 deepsort.increment_ages()
-
-            # Print time (inference + NMS)
-            print('%sDone. (%.3fs)' % (s, t2 - t1))
 
             # Stream results
             if show_vid:
@@ -199,7 +241,8 @@ def detect(opt):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--yolo_weights', type=str, default='yolov5/weights/yolov5s.pt', help='model.pt path')
-    parser.add_argument('--deep_sort_weights', type=str, default='deep_sort_pytorch/deep_sort/deep/checkpoint/ckpt.t7', help='ckpt.t7 path')
+    parser.add_argument('--deep_sort_weights', type=str, default='deep_sort_pytorch/deep_sort/deep/checkpoint/ckpt.t7',
+                        help='ckpt.t7 path')
     # file/folder, 0 for webcam
     parser.add_argument('--source', type=str, default='0', help='source')
     parser.add_argument('--output', type=str, default='inference/output', help='output folder')  # output folder
